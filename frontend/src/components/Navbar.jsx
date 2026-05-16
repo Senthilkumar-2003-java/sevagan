@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
+
 export default function Navbar() {
   const { logout } = useAuth()
   const navigate   = useNavigate()
@@ -29,9 +30,11 @@ export default function Navbar() {
         {/* Nav Links */}
         <div className="hidden md:flex items-center gap-8">
           {[
-            { to: '/donors/create', label: 'Create Donors',  icon: 'person_add' },
-            { to: '/donors/list',   label: 'Donors List',    icon: 'group'      },
-            { to: '/receipt',       label: 'Bill Receipt',   icon: 'receipt_long' },
+              { to: '/dashboard/donors/confirm', label: 'Confirm Donors', icon: 'verified'     },
+            { to: '/dashboard/donors/create', label: 'Create Donors',  icon: 'person_add'   },
+{ to: '/dashboard/donors/list',   label: 'Donors List',    icon: 'group'        },
+{ to: '/dashboard/receipt',       label: 'Bill Receipt',   icon: 'receipt_long' },
+
           ].map(({ to, label, icon }) => (
             <NavLink key={to} to={to} className={navLinkClass}>
               {({ isActive }) => (

@@ -1,6 +1,5 @@
 from django.db import models
 
-
 class Donor(models.Model):
     FOOD_CHOICES = [
         ('morning', 'Morning'),
@@ -53,3 +52,49 @@ class Donor(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+# ── ADD AT BOTTOM OF models.py ────────────────────────────────────────────────
+
+class ConfirmedDonor(models.Model):
+    FOOD_CHOICES = [
+        ('morning',   'Morning'),
+        ('afternoon', 'Afternoon'),
+        ('night',     'Night'),
+    ]
+    OCCASION_CHOICES = [
+        ('birthday',    'Birthday'),
+        ('anniversary', 'Anniversary'),
+        ('memorial',    'Memorial'),
+    ]
+
+    donor         = models.ForeignKey(Donor, on_delete=models.CASCADE, related_name='confirmations')
+    occasion_type = models.CharField(max_length=20, choices=OCCASION_CHOICES)
+    occasion_date = models.DateField()
+    food          = models.CharField(max_length=20, choices=FOOD_CHOICES)
+    created_at    = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Confirmed: {self.donor} – {self.occasion_type}"
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class DonorAction(models.Model):
+    """Tracks per-year confirm/next-time so donors vanish from sidebar after action."""
+    ACTION_CHOICES = [
+        ('confirmed',  'Confirmed'),
+        ('next_time',  'Next Time'),
+    ]
+
+    donor      = models.ForeignKey(Donor, on_delete=models.CASCADE, related_name='actions')
+    event_type = models.CharField(max_length=20)   # birthday | anniversary | memorial
+    action     = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    year       = models.IntegerField()
+
+    class Meta:
+        unique_together = ['donor', 'event_type', 'year']
+
+    def __str__(self):
+        return f"{self.donor} – {self.event_type} – {self.action} ({self.year})"        

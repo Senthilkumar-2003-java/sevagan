@@ -7,11 +7,11 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import Donor
-from .serializers import DonorSerializer
+from .models import Donor, ConfirmedDonor, DonorAction
+from .serializers import DonorSerializer, ConfirmedDonorSerializer
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 VALID_EMAIL    = 'sevagan.senthil@gmail.com'
 VALID_PASSWORD = 'Senthil@2003'
@@ -53,8 +53,8 @@ class DonorViewSet(viewsets.ModelViewSet):
         search = self.request.query_params.get('search', '')
         if search:
             qs = qs.filter(
-                Q(first_name__icontains=search)  |
-                Q(last_name__icontains=search)   |
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search)  |
                 Q(phone__icontains=search)       |
                 Q(id__icontains=search)
             )
@@ -64,12 +64,11 @@ class DonorViewSet(viewsets.ModelViewSet):
 # ── Upcoming Events ───────────────────────────────────────────────────────────
 
 def _days_until(event_date: date, today: date) -> int | None:
-    """Return days until next occurrence of event_date (month/day match), or None."""
     if not event_date:
         return None
     try:
         this_year = event_date.replace(year=today.year)
-    except ValueError:          # Feb 29 in non-leap year
+    except ValueError:
         this_year = event_date.replace(year=today.year, day=28)
 
     if this_year < today:
@@ -88,26 +87,37 @@ def upcoming_events(request, event_type):
     today  = date.today()
     result = []
 
+    # ── Skip donors already acted on this year for this event type ────────────
+    acted_ids = set(
+        DonorAction.objects.filter(
+            event_type=event_type,
+            year=today.year
+        ).values_list('donor_id', flat=True)
+    )
+
     for donor in Donor.objects.all():
+        if donor.id in acted_ids:
+            continue
+
         events = []
 
         def push(ev_date, label, person=None):
             d = _days_until(ev_date, today)
             if d is not None:
                 events.append({
-                    'label':       label,
-                    'person':      person,
-                    'date':        str(ev_date),
-                    'days_until':  d,
+                    'label':      label,
+                    'person':     person,
+                    'date':       str(ev_date),
+                    'days_until': d,
                 })
 
         if event_type == 'birthday':
             if donor.donor_type == 'birthday':
                 push(donor.type_date, "Own Birthday")
-            push(donor.mother_birthday,  "Mother's Birthday", donor.mother_name)
-            push(donor.father_birthday,  "Father's Birthday", donor.father_name)
-            push(donor.child_birthday,   "Child's Birthday",  donor.child_name)
-            push(donor.wife_birthday,    "Wife's Birthday",   donor.wife_name)
+            push(donor.mother_birthday, "Mother's Birthday", donor.mother_name)
+            push(donor.father_birthday, "Father's Birthday", donor.father_name)
+            push(donor.child_birthday,  "Child's Birthday",  donor.child_name)
+            push(donor.wife_birthday,   "Wife's Birthday",   donor.wife_name)
 
         elif event_type == 'anniversary':
             if donor.donor_type == 'anniversary':
@@ -128,6 +138,101 @@ def upcoming_events(request, event_type):
                 'events':   events,
             })
 
-    # Sort by soonest event
     result.sort(key=lambda x: min(e['days_until'] for e in x['events']))
     return Response(result)
+
+
+# ── Confirm / Next-Time / Reject from Sidebar ─────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def confirm_donor(request):
+    """Save ConfirmedDonor record + mark DonorAction as confirmed."""
+    donor_id      = request.data.get('donor_id')
+    event_type    = request.data.get('event_type')
+    occasion_type = request.data.get('occasion_type')
+    occasion_date = request.data.get('occasion_date')
+    food          = request.data.get('food')
+
+    try:
+        donor = Donor.objects.get(pk=donor_id)
+    except Donor.DoesNotExist:
+        return Response({'error': 'Donor not found'}, status=404)
+
+    ConfirmedDonor.objects.create(
+        donor=donor,
+        occasion_type=occasion_type,
+        occasion_date=occasion_date,
+        food=food,
+    )
+    DonorAction.objects.get_or_create(
+        donor=donor,
+        event_type=event_type,
+        year=date.today().year,
+        defaults={'action': 'confirmed'},
+    )
+    return Response({'status': 'confirmed'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def next_time_donor(request):
+    """Hide donor from sidebar for this year; re-appears automatically next year."""
+    donor_id   = request.data.get('donor_id')
+    event_type = request.data.get('event_type')
+
+    try:
+        donor = Donor.objects.get(pk=donor_id)
+    except Donor.DoesNotExist:
+        return Response({'error': 'Donor not found'}, status=404)
+
+    DonorAction.objects.get_or_create(
+        donor=donor,
+        event_type=event_type,
+        year=date.today().year,
+        defaults={'action': 'next_time'},
+    )
+    return Response({'status': 'next_time'})
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def reject_donor(request, donor_id):
+    """Permanently delete donor from database."""
+    try:
+        Donor.objects.get(pk=donor_id).delete()
+        return Response({'status': 'rejected'})
+    except Donor.DoesNotExist:
+        return Response({'error': 'Donor not found'}, status=404)
+
+
+# ── Confirmed Donors Page ─────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def confirmed_donors_list(request):
+    serializer = ConfirmedDonorSerializer(ConfirmedDonor.objects.all(), many=True)
+    return Response(serializer.data)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def complete_confirmed(request, confirmed_id):
+    """Remove from confirmed list — donor stays in DB."""
+    try:
+        ConfirmedDonor.objects.get(pk=confirmed_id).delete()
+        return Response({'status': 'completed'})
+    except ConfirmedDonor.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def reject_confirmed(request, confirmed_id):
+    """Permanently delete the donor from DB (cascades confirmed record)."""
+    try:
+        record = ConfirmedDonor.objects.get(pk=confirmed_id)
+        record.donor.delete()
+        return Response({'status': 'rejected'})
+    except ConfirmedDonor.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
